@@ -2,6 +2,10 @@
 
 Example of how to use the Apache Tika ForkParser
 
+The tika-fork-main sub-project has a `dist` task that builds the `tikaBin` directory that you give to the `ForkParser`'s first argument.
+
+The tika-fork-client sub-project shows you you can create a parser using tikaBin directory created above. 
+
 # Running
 
 ```
