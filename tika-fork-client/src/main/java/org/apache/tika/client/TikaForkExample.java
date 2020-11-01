@@ -4,7 +4,9 @@ import org.apache.tika.fork.ForkParser;
 import org.apache.tika.fork.ParserFactoryFactory;
 import org.apache.tika.metadata.Metadata;
 import org.apache.tika.parser.ParseContext;
+import org.apache.tika.sax.BodyContentHandler;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.nio.file.Paths;
@@ -13,6 +15,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class TikaForkExample {
+
   public static void main(String[] args) throws Exception {
 
     String pathToTikaMainDist = args[0];
@@ -32,13 +35,18 @@ public class TikaForkExample {
     forkParser.setServerParseTimeoutMillis(60000);
     forkParser.setServerPulseMillis(1000);
 
-    CollectingParser collectingParser = new CollectingParser(forkParser, fileToParse.getName());
+    CollectingParser collectingParser = new CollectingParser(forkParser);
 
     ParseContext parseContext = new ParseContext();
     Metadata metadata = new Metadata();
+    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    BodyContentHandler contentHandler = new BodyContentHandler(baos);
 
     try (FileInputStream fis = new FileInputStream(fileToParse)) {
-      collectingParser.parse(fis, null, metadata, parseContext);
+      collectingParser.parse(fis, contentHandler, metadata, parseContext);
     }
+
+    System.out.println(metadata);
+    System.out.println(baos.toString());
   }
 }

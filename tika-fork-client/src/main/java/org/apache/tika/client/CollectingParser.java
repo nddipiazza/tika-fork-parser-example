@@ -9,33 +9,21 @@ import org.apache.tika.parser.Parser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.xml.sax.ContentHandler;
-import org.xml.sax.SAXException;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
-/**
- * This is a modified version of RecursiveParserWrapper.
- */
 public class CollectingParser implements Parser {
   private static final Logger LOG = LoggerFactory.getLogger(CollectingParser.class);
 
-  private static final int maxStackDepth = 20;
-
   private final Parser wrappedParser;
   private final ParseContext plainContext = new ParseContext();
-  private final String id;
 
-  //used in naming embedded resources that don't have a name.
-  private int currentDepth = 0;
-
-  public CollectingParser(Parser wrappedParser, String id) {
+  public CollectingParser(Parser wrappedParser) {
     this.wrappedParser = wrappedParser;
-    this.id = id;
     this.plainContext.set(Parser.class, wrappedParser);
   }
 
@@ -45,8 +33,8 @@ public class CollectingParser implements Parser {
   }
 
   @Override
-  public void parse(InputStream stream, ContentHandler ignore,
-                    Metadata metadata, ParseContext context) throws IOException, SAXException, TikaException {
+  public void parse(InputStream stream, ContentHandler contentHandler,
+                    Metadata metadata, ParseContext context) throws IOException, TikaException {
     TikaInputStream tikaInputStream;
     InputStream streamToClose = null;
     try {
@@ -60,7 +48,7 @@ public class CollectingParser implements Parser {
         streamToClose = tikaInputStream;
       }
       // is main
-      parseInternal(id, tikaInputStream, metadata, context, wrappedParser, 0, true);
+      parseInternal(tikaInputStream, metadata, context, wrappedParser, contentHandler);
     } finally {
       if (streamToClose != null) {
         // Consume the remainder of the stream if needed. This prevents Piped input streams from
@@ -75,23 +63,8 @@ public class CollectingParser implements Parser {
     }
   }
 
-  private void parseInternal(String location, InputStream stream, Metadata metadata, ParseContext context, Parser parser,
-                             int lastDoc, boolean isMain) throws IOException, TikaException {
-    currentDepth++;
-    if (currentDepth > maxStackDepth) {
-      LOG.warn("Avoiding parsing loop in " + location + ", nesting level: " + currentDepth);
-      return;
-    }
-    try {
-      parseInternalUnchecked(location, stream, metadata, context, parser, lastDoc, isMain);
-    } finally {
-      currentDepth--;
-    }
-  }
 
-
-  private void parseInternalUnchecked(String location, InputStream stream, Metadata metadata, ParseContext context, Parser parser,
-                                      int lastDoc, boolean isMain) throws IOException, TikaException {
+  private void parseInternal(InputStream stream, Metadata metadata, ParseContext context, Parser parser, ContentHandler contentHandler) throws IOException, TikaException {
     String contentType = metadata.get(Metadata.CONTENT_TYPE);
     if (contentType == null) {
       contentType = "application/octet-stream";
@@ -106,8 +79,7 @@ public class CollectingParser implements Parser {
         tikaInputStream = TikaInputStream.get(stream);
         streamsToClose.add(tikaInputStream);
       }
-      TikaBodyContentHandler tikaBodyContentHandler = new TikaBodyContentHandler(new PrintWriter(System.out));
-      parser.parse(tikaInputStream, tikaBodyContentHandler, metadata, context);
+      parser.parse(tikaInputStream, contentHandler, metadata, context);
 
     } catch (Exception e) {
       throw new TikaException("Could not parse", e);
