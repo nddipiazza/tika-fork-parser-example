@@ -1,0 +1,11 @@
+plugins {
+  id 'java'
+}
+
+group 'org.apache.tika'
+
+sourceCompatibility = 1.8
+
+repositories {
+  mavenCentral()
+}

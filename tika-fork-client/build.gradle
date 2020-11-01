@@ -1,0 +1,54 @@
+plugins {
+    id "java"
+}
+
+group "org.apache.tika"
+
+sourceCompatibility = 1.8
+
+repositories {
+    mavenCentral()
+}
+
+apply plugin: 'maven-publish'
+
+jar {
+    baseName "tika-fork-client"
+    manifest {
+        attributes(
+            'Main-Class': 'org.apache.tika.client.TikaForkExample'
+        )
+    }
+}
+
+configurations.all {
+    exclude module: 'slf4j-log4j12'
+}
+
+task copyDependencies(type: Copy) {
+    from configurations.runtime
+    into new File(buildDir, "dist")
+}
+
+
+dependencies {
+    compile 'org.apache.logging.log4j:log4j-slf4j-impl:2.9.0'
+    compile group: "org.apache.commons", name: "commons-pool2", version: "${commonsPoolVersion}"
+    compile group: 'commons-io', name: 'commons-io', version: "${commonsIoVersion}"
+    compile "org.apache.commons:commons-lang3:3.4"
+    compile "org.apache.tika:tika-core:${tikaVersion}"
+    compile "org.apache.tika:tika-parsers:${tikaVersion}"
+
+    testCompile group: 'org.awaitility', name: 'awaitility', version: '3.1.6'
+    testCompile group: "junit", name: "junit", version: "${junitVersion}"
+    testCompile "org.eclipse.jetty:jetty-server:${jettyVersion}"
+    testCompile "org.apache.httpcomponents:httpclient:${httpClientVersion}"
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+        }
+    }
+}

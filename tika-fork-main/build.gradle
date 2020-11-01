@@ -1,0 +1,54 @@
+plugins {
+    id "java"
+}
+
+group "org.apache.tika"
+
+sourceCompatibility = 1.8
+
+repositories {
+    mavenCentral()
+}
+
+jar {
+    baseName "tika-fork-main"
+}
+
+configurations.all {
+    exclude module: 'slf4j-log4j12'
+}
+
+dependencies {
+    compile "com.fasterxml.jackson.core:jackson-databind:${jacksonDatabindVersion}"
+    compile "org.apache.tika:tika-core:${tikaVersion}"
+    compile "org.apache.tika:tika-parsers:${tikaVersion}"
+    compile "args4j:args4j:${args4jVersion}"
+    compile "org.apache.logging.log4j:log4j-slf4j-impl:${log4jSlf4jVersion}"
+    compile "org.apache.commons:commons-lang3:${commonsLang3Version}"
+    testCompile group: "junit", name: "junit", version: "${junitVersion}"
+}
+
+task copyDependencies(type: Copy) {
+    from configurations.runtime
+    into new File(buildDir, "dist")
+}
+
+task copyJarToDist(type: Copy) {
+    from "$buildDir/libs/tika-fork-main-${version}.jar"
+    into new File(buildDir, "dist")
+}
+
+task tarz(type: Tar) {
+    archiveName = "tika-fork-main-${version}.tgz"
+    into ('/') {
+        from 'build/dist'
+        include '*'
+    }
+    destinationDir  file('build/tgz')
+    extension 'tgz'
+    compression = Compression.GZIP
+}
+
+task dist(dependsOn: [build, copyDependencies, copyJarToDist, tarz]) {
+
+}
