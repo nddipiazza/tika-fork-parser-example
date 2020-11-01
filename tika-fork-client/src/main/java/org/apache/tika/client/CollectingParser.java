@@ -1,5 +1,6 @@
 package org.apache.tika.client;
 
+import org.apache.commons.lang3.StringUtils;
 import org.apache.tika.exception.TikaException;
 import org.apache.tika.io.TikaInputStream;
 import org.apache.tika.metadata.Metadata;
@@ -32,6 +33,24 @@ public class CollectingParser implements Parser {
     return wrappedParser.getSupportedTypes(context);
   }
 
+  public static long drainInputStream(InputStream is) {
+    long numRead = 0;
+    try {
+      while (is.read() >= 0) {
+        // emptying the stream to prevent a client-side "pipe closed" error
+        ++numRead;
+      }
+    } catch (IOException e) {
+      if (!StringUtils.containsIgnoreCase(e.getMessage(), "stream closed") &&
+          !StringUtils.containsIgnoreCase(e.getMessage(), "pipe closed")) {
+        LOG.error("Could not drain remaining bytes.", e);
+      } else {
+        LOG.debug("Could not drain remaining bytes from input stream because stream is already closed.", e);
+      }
+    }
+    return numRead;
+  }
+
   @Override
   public void parse(InputStream stream, ContentHandler contentHandler,
                     Metadata metadata, ParseContext context) throws IOException, TikaException {
@@ -53,7 +72,7 @@ public class CollectingParser implements Parser {
       if (streamToClose != null) {
         // Consume the remainder of the stream if needed. This prevents Piped input streams from
         // throwing "pipe closed" exceptions when close is called.
-        IOUtils.drainInputStream(streamToClose);
+        drainInputStream(streamToClose);
         try {
           streamToClose.close();
         } catch (IOException e) {
