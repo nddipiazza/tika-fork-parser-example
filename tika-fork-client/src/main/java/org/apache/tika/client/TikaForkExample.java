@@ -5,6 +5,8 @@ import org.apache.tika.fork.ParserFactoryFactory;
 import org.apache.tika.metadata.Metadata;
 import org.apache.tika.parser.ParseContext;
 import org.apache.tika.sax.BodyContentHandler;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -15,6 +17,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class TikaForkExample {
+  private static final Logger LOG = LoggerFactory.getLogger(TikaForkExample.class);
 
   public static void main(String[] args) throws Exception {
 
@@ -46,7 +49,7 @@ public class TikaForkExample {
       collectingParser.parse(fis, contentHandler, metadata, parseContext);
     }
 
-    System.out.println(metadata);
-    System.out.println(baos.toString());
+    LOG.info("Metadata: {}", metadata);
+    LOG.info("Parsed text: {}", baos.toString());
   }
 }
