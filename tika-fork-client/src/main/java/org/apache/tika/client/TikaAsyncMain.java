@@ -3,6 +3,11 @@ package org.apache.tika.client;
 import com.google.common.base.Stopwatch;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.net.UrlEscapers;
+import com.optimaize.langdetect.LanguageDetector;
+import com.optimaize.langdetect.LanguageDetectorBuilder;
+import com.optimaize.langdetect.ngram.NgramExtractors;
+import com.optimaize.langdetect.profiles.LanguageProfile;
+import com.optimaize.langdetect.profiles.LanguageProfileReader;
 import org.apache.commons.compress.utils.Lists;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.FilenameUtils;
@@ -101,13 +106,18 @@ public class TikaAsyncMain {
   private static final int HTTPCLIENT_CONNECT_TIMEOUT = Integer.parseInt(StringUtils.defaultIfBlank(System.getenv("HTTPCLIENT_CONNECT_TIMEOUT"), "5000"));
   private static final int HTTPCLIENT_SOCKET_TIMEOUT = Integer.parseInt(StringUtils.defaultIfBlank(System.getenv("HTTPCLIENT_SOCKET_TIMEOUT"), "30000"));
   private static final int SOLR_INSERT_BATCH = Integer.parseInt(StringUtils.defaultIfBlank(System.getenv("SOLR_INSERT_BATCH"), "10"));
+  private static final int MAX_PARSE_FAILURES = Integer.parseInt(StringUtils.defaultIfBlank(System.getenv("MAX_PARSE_FAILURES"), "2"));
   private final static String KEY = "ahey74832jfha8hijjhtnuag3ga7462hafha";
   private static final String KEYUN = System.getenv("KEYUN");
   private static final String KEYPWD = System.getenv("KEYPWD");
   private static final String KEYDOM = System.getenv("KEYDOM");
+  public static final String LW_ASYNC_PARSING_FAIL_COUNT_I = "_lw_async_parsing_fail_count_i";
+  public static final String LW_ASYNC_PARSING_DOWNLOAD_URL_S = "_lw_async_parsing_download_url_s";
+  public static final String LW_ASYNC_PARSING_ID_I = "_lw_async_parsing_id_i";
+  public static final String LW_PARSE_ERROR_CLASS_S = "_lw_parse_error_class_s";
+  public static final String LW_PARSE_ERROR_MESSAGE_S = "_lw_parse_error_message_s";
 
   private CloseableHttpClient httpClient;
-  private String pathToTikaMainDist;
 
   private static final Pattern SPECIAL_CHAR_PATTERN = Pattern.compile("%([0-9abcdefABCDEF]{2})");
 
@@ -213,7 +223,6 @@ public class TikaAsyncMain {
 
   public static void main(String[] args) throws Exception {
     TikaAsyncMain main = new TikaAsyncMain();
-    main.pathToTikaMainDist = args[0];
     main.initHttpClient();
     while (true) {
       main.runParseJob();
@@ -251,6 +260,15 @@ public class TikaAsyncMain {
     AtomicInteger numRunningThreads = new AtomicInteger(0);
     for (int i = 0; i < THREAD_COUNT; ++i) {
       parseService.submit(() -> {
+        List<LanguageProfile> languageProfiles;
+        try {
+          languageProfiles = new LanguageProfileReader().readAllBuiltIn();
+        } catch (IOException e) {
+          throw new RuntimeException("Could not build language profile", e);
+        }
+        LanguageDetector languageDetector = LanguageDetectorBuilder.create(NgramExtractors.standard())
+            .withProfiles(languageProfiles)
+            .build();
         try (CloudSolrClient solrClient = new CloudSolrClient.Builder()
             .withZkHost(SOLR_ZK_HOSTS)
             .withZkChroot(SOLR_ZK_CHROOT)
@@ -283,6 +301,7 @@ public class TikaAsyncMain {
                 String[] spl = nextLine.split("\t");
                 String id = spl[0];
                 String url = spl[1];
+                int failCount = Integer.parseInt(spl[2]);
 
                 logger.info("Fetching next url: {}", url);
 
@@ -298,7 +317,7 @@ public class TikaAsyncMain {
                   try {
                     response = httpClient.execute(new HttpGet(encodePath(url)));
                     if (response.getStatusLine().getStatusCode() != 200) {
-                      throw new IOException("Bad status code " + response.getStatusLine());
+                      throw new IOException("Could not fetch url=" + url + ", HttpStatus=" + response.getStatusLine());
                     }
                     File copiedToFile = File.createTempFile("copyfile", "." + FilenameUtils.getExtension(url));
                     try {
@@ -308,24 +327,41 @@ public class TikaAsyncMain {
 
                         SolrInputDocument updateDoc = new SolrInputDocument();
                         updateDoc.setField("id", id);
-                        updateDoc.setField("body_t", ImmutableMap.of("set", baos.toString()));
-                        updateDoc.setField("_lw_async_parsing_id_i", ImmutableMap.of("removeregex", ".*"));
-                        updateDoc.setField("_lw_async_parsing_download_url_s", ImmutableMap.of("removeregex", ".*"));
-                        insertBatch.add(updateDoc);
-
-                        if (insertBatch.size() >= SOLR_INSERT_BATCH) {
-                          insertBatchIntoSolr(solrClient, insertBatch);
+                        String body = baos.toString();
+                        String lang = languageDetector.detect(body).isPresent() ? languageDetector.detect(body).get().getLanguage() : "en";
+                        updateDoc.setField("body_txt_" + lang, ImmutableMap.of("set", body));
+                        updateDoc.setField(LW_ASYNC_PARSING_ID_I, ImmutableMap.of("removeregex", ".*"));
+                        updateDoc.setField(LW_ASYNC_PARSING_DOWNLOAD_URL_S, ImmutableMap.of("removeregex", ".*"));
+                        if (failCount > 0) {
+                          updateDoc.setField(LW_PARSE_ERROR_CLASS_S, ImmutableMap.of("removeregex", ".*"));
+                          updateDoc.setField(LW_PARSE_ERROR_MESSAGE_S, ImmutableMap.of("removeregex", ".*"));
+                          updateDoc.setField(LW_ASYNC_PARSING_FAIL_COUNT_I, ImmutableMap.of("removeregex", ".*"));
                         }
+                        insertBatch.add(updateDoc);
                       }
                     } finally {
                       FileUtils.deleteQuietly(copiedToFile);
                     }
                   } catch (TikaException e) {
-                    logger.error("Could not parse url {}", url, e);
+                    logger.error("Tika exception for url={}. Emitting a parse failure doc.", url, e);
+                    insertExceptionToBatch(insertBatch, id, e.getClass().getName(), e.getMessage());
                   } catch (Exception e) {
-                    logger.error("Could not download URL {}", url, e);
+                    if (failCount < MAX_PARSE_FAILURES) {
+                      logger.error("Non-tika exception when trying to parse previouslyFailedCount={}, URL={}. Will retry again next time.", url, failCount, e);
+                      SolrInputDocument updateDoc = new SolrInputDocument();
+                      updateDoc.setField("id", id);
+                      updateDoc.setField(LW_ASYNC_PARSING_FAIL_COUNT_I, ImmutableMap.of("set", failCount + 1));
+                      putParseErrorFieldsOnSolrDoc(e.getClass().getName(), e.getMessage(), updateDoc);
+                      insertBatch.add(updateDoc);
+                    } else {
+                      logger.error("Non-tika exception when trying to parse previouslyFailedCount={}, URL={}. Exceeded max retry attempts. Emitting error.", url, failCount, e);
+                      insertExceptionToBatch(insertBatch, id, e.getClass().getName(), e.getMessage());
+                    }
                   } finally {
                     HttpClientUtils.closeQuietly(response);
+                  }
+                  if (insertBatch.size() >= SOLR_INSERT_BATCH) {
+                    insertBatchIntoSolr(solrClient, insertBatch);
                   }
                 } finally {
                   logger.info("Fetch thread is completed, processed={}", numProcessed);
@@ -352,6 +388,22 @@ public class TikaAsyncMain {
     parseService.shutdown();
   }
 
+  private void insertExceptionToBatch(List<SolrInputDocument> insertBatch, String id, String name, String message) {
+    SolrInputDocument updateDoc = new SolrInputDocument();
+    updateDoc.setField("id", id);
+    putParseErrorFieldsOnSolrDoc(name, message, updateDoc);
+    updateDoc.setField(LW_ASYNC_PARSING_ID_I, ImmutableMap.of("removeregex", ".*"));
+    updateDoc.setField(LW_ASYNC_PARSING_DOWNLOAD_URL_S, ImmutableMap.of("removeregex", ".*"));
+    insertBatch.add(updateDoc);
+  }
+
+  private void putParseErrorFieldsOnSolrDoc(String name, String message, SolrInputDocument updateDoc) {
+    updateDoc.setField(LW_PARSE_ERROR_CLASS_S, ImmutableMap.of("set", name));
+    if (StringUtils.isNotBlank(message)) {
+      updateDoc.setField(LW_PARSE_ERROR_MESSAGE_S, ImmutableMap.of("set", message));
+    }
+  }
+
   private File fetchFilesToParse(String hostName) throws IOException {
     try (CloudSolrClient solrClient = new CloudSolrClient.Builder()
         .withZkHost(SOLR_ZK_HOSTS)
@@ -370,7 +422,7 @@ public class TikaAsyncMain {
       try (PrintWriter printWriter = new PrintWriter(filesToParseCsv)) {
         SolrQuery query = new SolrQuery();
         query.set("q", "_lw_async_parsing_id_i:[" + rangeBegin + " TO " + rangeEnd + "]");
-        query.set("fl", "id,_lw_async_parsing_download_url_s");
+        query.set("fl", String.format("id,%s,%s", LW_ASYNC_PARSING_DOWNLOAD_URL_S, LW_ASYNC_PARSING_FAIL_COUNT_I));
         query.setRows(5000);
         query.setSort(SolrQuery.SortClause.asc("id"));
         String cursorMark = CursorMarkParams.CURSOR_MARK_START;
@@ -384,7 +436,10 @@ public class TikaAsyncMain {
             ++fileCount;
             printWriter.print(sd.getFieldValue("id"));
             printWriter.print("\t");
-            printWriter.println(sd.getFieldValue("_lw_async_parsing_download_url_s"));
+            printWriter.print(sd.getFieldValue(LW_ASYNC_PARSING_DOWNLOAD_URL_S));
+            printWriter.print("\t");
+            int failCount = sd.getFieldValue(LW_ASYNC_PARSING_FAIL_COUNT_I) == null ? 0 : (Integer) sd.getFieldValue(LW_ASYNC_PARSING_FAIL_COUNT_I);
+            printWriter.println(failCount);
           }
           if (cursorMark.equals(nextCursorMark)) {
             done = true;
