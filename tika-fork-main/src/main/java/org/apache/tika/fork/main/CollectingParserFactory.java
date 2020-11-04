@@ -6,6 +6,7 @@ import org.apache.tika.parser.ParserFactory;
 
 import java.util.Map;
 
+@SuppressWarnings("unused")
 public class CollectingParserFactory extends ParserFactory {
 
   Map<String, String> args;

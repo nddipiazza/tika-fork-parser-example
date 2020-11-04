@@ -1,4 +1,4 @@
-package org.apache.tika.fork.main;
+package org.apache.tika.client;
 
 import org.apache.tika.config.TikaConfig;
 import org.apache.tika.detect.DefaultDetector;
